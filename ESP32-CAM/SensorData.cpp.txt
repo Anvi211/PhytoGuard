@@ -1,0 +1,142 @@
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include "DHT.h"
+
+
+/* ---------- WIFI ---------- */
+#define WIFI_SSID     "Ganesh"
+#define WIFI_PASSWORD "DECEMBER@23"
+
+
+/* ---------- FIREBASE RTDB ---------- */
+const char* FIREBASE_BASE_URL =
+  "https://plantcaresystem-1e3e3-default-rtdb.asia-southeast1.firebasedatabase.app";
+
+
+/* ---------- DHT11 ---------- */
+#define DHTPIN 4
+#define DHTTYPE DHT11
+DHT dht(DHTPIN, DHTTYPE);
+
+
+/* ---------- SOIL SENSOR ---------- */
+#define SOIL_PIN 34
+
+
+/* ---------- TIMING ---------- */
+unsigned long lastLatestSend = 0;
+unsigned long lastHistorySend = 0;
+
+
+const unsigned long LATEST_INTERVAL  = 5000;   // 5 seconds
+const unsigned long HISTORY_INTERVAL = 20000;  // 20 seconds
+
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+
+
+  dht.begin();
+
+
+  /* ---- WiFi ---- */
+  Serial.print("Connecting to WiFi");
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(300);
+    Serial.print(".");
+  }
+  Serial.println("\nWiFi Connected");
+}
+
+
+void loop() {
+  unsigned long currentMillis = millis();
+
+
+  /* ---- Read Sensors ---- */
+  float temperature = dht.readTemperature();
+  float humidity    = dht.readHumidity();
+  int soilRaw       = analogRead(SOIL_PIN);
+
+
+  if (isnan(temperature) || isnan(humidity)) {
+    Serial.println("DHT11 read failed");
+    delay(2000);
+    return;
+  }
+
+
+  int soilPercent = map(soilRaw, 4095, 0, 0, 100);
+  soilPercent = constrain(soilPercent, 0, 100);
+
+
+  unsigned long timestamp = currentMillis;
+
+
+  /* ---- Create JSON ---- */
+  String jsonData = "{";
+  jsonData += "\"temperature\":" + String(temperature) + ",";
+  jsonData += "\"humidity\":" + String(humidity) + ",";
+  jsonData += "\"soilRaw\":" + String(soilRaw) + ",";
+  jsonData += "\"soilPercent\":" + String(soilPercent) + ",";
+  jsonData += "\"timestamp\":" + String(timestamp);
+  jsonData += "}";
+
+
+  /* ================= LATEST DATA (5s) ================= */
+  if (currentMillis - lastLatestSend >= LATEST_INTERVAL) {
+    lastLatestSend = currentMillis;
+
+
+    HTTPClient httpLatest;
+    String latestURL = String(FIREBASE_BASE_URL) +
+                       "/PlantSystem/SensorData.json";
+
+
+    httpLatest.begin(latestURL);
+    httpLatest.addHeader("Content-Type", "application/json");
+    int res1 = httpLatest.PUT(jsonData);
+    httpLatest.end();
+
+
+    Serial.print("Latest update (5s): ");
+    Serial.println(res1 > 0 ? "OK" : "FAILED");
+  }
+
+
+  /* ================= HISTORY DATA (20s) ================= */
+  if (currentMillis - lastHistorySend >= HISTORY_INTERVAL) {
+    lastHistorySend = currentMillis;
+
+
+    HTTPClient httpHistory;
+    String historyURL = String(FIREBASE_BASE_URL) +
+                        "/PlantSystem/History.json";
+
+
+    httpHistory.begin(historyURL);
+    httpHistory.addHeader("Content-Type", "application/json");
+    int res2 = httpHistory.POST(jsonData);
+    httpHistory.end();
+
+
+    Serial.print("History update (20s): ");
+    Serial.println(res2 > 0 ? "OK" : "FAILED");
+    Serial.println("--------------------------------");
+  }
+
+
+  /* ---- Serial Monitor (every loop) ---- */
+  Serial.print("Temp: ");
+  Serial.print(temperature);
+  Serial.print(" °C | Hum: ");
+  Serial.print(humidity);
+  Serial.print(" % | Soil: ");
+  Serial.print(soilPercent);
+  Serial.println(" %");
+
+
+  delay(500); // small delay to avoid flooding Serial
+}
